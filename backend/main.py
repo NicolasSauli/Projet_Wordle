@@ -1,13 +1,14 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from typing import Optional
 import random
 import string
-from datetime import datetime
+import json
 import hashlib
+import asyncio
 
-app = FastAPI(title="Wordle API", version="1.0.0")
+app = FastAPI(title="Wordle API", version="2.0.0")
 
 # CORS middleware for frontend
 app.add_middleware(
@@ -25,15 +26,54 @@ MOTS_DISPONIBLES = [
     "MAGIE", "NAGER", "ORDRE", "PAINS", "RONDE",
     "TEMPS", "UTILE", "VENIR", "WAGON", "ZONES",
     "MONDE", "BLANC", "ROUGE", "TERRE", "VERRE",
-    "CHAUD", "FROID", "PLAGE", "SOLEIL".replace("SOLEIL", "SABLE"),
-    "LUNDI", "MARDI", "MERCI", "NUITS", "FORME"
+    "CHAUD", "FROID", "PLAGE", "SABLE", "FORME",
+    "LUNDI", "MARDI", "MERCI", "NUITS", "PIANO"
 ]
 
-# In-memory storage (replace with database in production)
+# In-memory storage
 users_db = {}
 stats_db = {}
 lobbies_db = {}
-games_db = {}
+
+
+# WebSocket Connection Manager
+class ConnectionManager:
+    def __init__(self):
+        # lobby_code -> {email -> WebSocket}
+        self.active_connections: dict[str, dict[str, WebSocket]] = {}
+
+    async def connect(self, websocket: WebSocket, lobby_code: str, email: str):
+        await websocket.accept()
+        if lobby_code not in self.active_connections:
+            self.active_connections[lobby_code] = {}
+        self.active_connections[lobby_code][email] = websocket
+
+    def disconnect(self, lobby_code: str, email: str):
+        if lobby_code in self.active_connections:
+            if email in self.active_connections[lobby_code]:
+                del self.active_connections[lobby_code][email]
+            if not self.active_connections[lobby_code]:
+                del self.active_connections[lobby_code]
+
+    async def broadcast_to_lobby(self, lobby_code: str, message: dict, exclude_email: str = None):
+        if lobby_code in self.active_connections:
+            for email, ws in self.active_connections[lobby_code].items():
+                if email != exclude_email:
+                    try:
+                        await ws.send_json(message)
+                    except:
+                        pass
+
+    async def send_to_player(self, lobby_code: str, email: str, message: dict):
+        if lobby_code in self.active_connections:
+            if email in self.active_connections[lobby_code]:
+                try:
+                    await self.active_connections[lobby_code][email].send_json(message)
+                except:
+                    pass
+
+
+manager = ConnectionManager()
 
 
 # Pydantic models
@@ -82,37 +122,8 @@ class LobbyResponse(BaseModel):
     nom: str
     createur: str
     joueurs: list[JoueurLobby]
-
-
-class GameStart(BaseModel):
-    email: str
-    lobby_code: str
-
-
-class GameResponse(BaseModel):
-    game_id: str
-    longueur: int
-    tentatives_restantes: int
-
-
-class GuessSubmit(BaseModel):
-    game_id: str
-    guess: str
-    email: str
-
-
-class LetterResult(BaseModel):
-    lettre: str
-    etat: str  # 'correct', 'present', 'absent'
-
-
-class GuessResponse(BaseModel):
-    correction: list[LetterResult]
-    gagne: bool
-    perdu: bool
-    mot_secret: Optional[str] = None
-    score: Optional[int] = None
-    tentatives_restantes: int
+    en_jeu: bool = False
+    mot_longueur: Optional[int] = None
 
 
 def hash_password(password: str) -> str:
@@ -121,10 +132,6 @@ def hash_password(password: str) -> str:
 
 def generate_lobby_code() -> str:
     return ''.join(random.choices(string.digits, k=6))
-
-
-def generate_game_id() -> str:
-    return ''.join(random.choices(string.ascii_letters + string.digits, k=12))
 
 
 def corriger_guess(mot_secret: str, guess: str) -> list[dict]:
@@ -157,10 +164,10 @@ def corriger_guess(mot_secret: str, guess: str) -> list[dict]:
     return result
 
 
-# Routes
+# REST Routes
 @app.get("/")
 def root():
-    return {"message": "Wordle API is running"}
+    return {"message": "Wordle API v2.0 with WebSockets"}
 
 
 @app.post("/auth/register", response_model=UserResponse)
@@ -212,11 +219,16 @@ def create_lobby(data: LobbyCreate):
         "code": code,
         "nom": data.nom,
         "createur": data.email,
-        "joueurs": [{"email": data.email, "nom": user["nom"], "score": 0}]
+        "joueurs": [{"email": data.email, "nom": user["nom"], "score": 0}],
+        "en_jeu": False,
+        "mot_secret": None,
+        "mot_longueur": None,
+        "joueurs_finis": [],
+        "joueurs_state": {}  # email -> {tentatives: [], termine: bool, gagne: bool}
     }
     lobbies_db[code] = lobby
 
-    return LobbyResponse(**lobby)
+    return LobbyResponse(**{k: v for k, v in lobby.items() if k in LobbyResponse.model_fields})
 
 
 @app.post("/lobby/join", response_model=LobbyResponse)
@@ -234,127 +246,195 @@ def join_lobby(data: LobbyJoin):
     if not any(j["email"] == data.email for j in lobby["joueurs"]):
         lobby["joueurs"].append({"email": data.email, "nom": user["nom"], "score": 0})
 
-    return LobbyResponse(**lobby)
+    return LobbyResponse(**{k: v for k, v in lobby.items() if k in LobbyResponse.model_fields})
 
 
 @app.get("/lobby/{code}", response_model=LobbyResponse)
 def get_lobby(code: str):
     if code not in lobbies_db:
         raise HTTPException(status_code=404, detail="Lobby not found")
-    return LobbyResponse(**lobbies_db[code])
-
-
-@app.post("/lobby/{code}/leave")
-def leave_lobby(code: str, email: str):
-    if code not in lobbies_db:
-        raise HTTPException(status_code=404, detail="Lobby not found")
-
     lobby = lobbies_db[code]
-    lobby["joueurs"] = [j for j in lobby["joueurs"] if j["email"] != email]
-
-    # Delete lobby if empty
-    if not lobby["joueurs"]:
-        del lobbies_db[code]
-        return {"message": "Lobby deleted"}
-
-    return {"message": "Left lobby"}
+    return LobbyResponse(**{k: v for k, v in lobby.items() if k in LobbyResponse.model_fields})
 
 
-@app.post("/game/start", response_model=GameResponse)
-def start_game(data: GameStart):
-    if data.email not in users_db:
-        raise HTTPException(status_code=404, detail="User not found")
+# WebSocket endpoint
+@app.websocket("/ws/{lobby_code}/{email}")
+async def websocket_endpoint(websocket: WebSocket, lobby_code: str, email: str):
+    if lobby_code not in lobbies_db:
+        await websocket.close(code=4004)
+        return
 
-    mot_secret = random.choice(MOTS_DISPONIBLES)
-    game_id = generate_game_id()
+    if email not in users_db:
+        await websocket.close(code=4001)
+        return
 
-    games_db[game_id] = {
-        "mot_secret": mot_secret,
-        "email": data.email,
-        "lobby_code": data.lobby_code,
-        "tentatives": [],
-        "termine": False,
-        "gagne": False
-    }
+    await manager.connect(websocket, lobby_code, email)
+    lobby = lobbies_db[lobby_code]
+    user = users_db[email]
 
-    return GameResponse(
-        game_id=game_id,
-        longueur=len(mot_secret),
-        tentatives_restantes=6
-    )
+    # Notify others that player joined
+    await manager.broadcast_to_lobby(lobby_code, {
+        "type": "player_joined",
+        "email": email,
+        "nom": user["nom"],
+        "joueurs": lobby["joueurs"]
+    }, exclude_email=email)
 
+    try:
+        while True:
+            data = await websocket.receive_json()
+            msg_type = data.get("type")
 
-@app.post("/game/guess", response_model=GuessResponse)
-def submit_guess(data: GuessSubmit):
-    if data.game_id not in games_db:
-        raise HTTPException(status_code=404, detail="Game not found")
+            if msg_type == "start_game":
+                # Only creator can start
+                if email == lobby["createur"]:
+                    mot_secret = random.choice(MOTS_DISPONIBLES)
+                    lobby["mot_secret"] = mot_secret
+                    lobby["mot_longueur"] = len(mot_secret)
+                    lobby["en_jeu"] = True
+                    lobby["joueurs_finis"] = []
+                    lobby["joueurs_state"] = {}
 
-    game = games_db[data.game_id]
+                    # Initialize state for all players
+                    for joueur in lobby["joueurs"]:
+                        lobby["joueurs_state"][joueur["email"]] = {
+                            "tentatives": [],
+                            "termine": False,
+                            "gagne": False
+                        }
 
-    if game["termine"]:
-        raise HTTPException(status_code=400, detail="Game is already over")
+                    # Broadcast game start to all players
+                    await manager.broadcast_to_lobby(lobby_code, {
+                        "type": "game_started",
+                        "longueur": len(mot_secret)
+                    })
 
-    mot_secret = game["mot_secret"]
-    guess = data.guess.upper()
+            elif msg_type == "guess":
+                if not lobby["en_jeu"]:
+                    continue
 
-    if len(guess) != len(mot_secret):
-        raise HTTPException(status_code=400, detail=f"Guess must be {len(mot_secret)} letters")
+                guess = data.get("guess", "").upper()
+                mot_secret = lobby["mot_secret"]
 
-    correction = corriger_guess(mot_secret, guess)
-    game["tentatives"].append({"mot": guess, "correction": correction})
+                if len(guess) != len(mot_secret):
+                    await manager.send_to_player(lobby_code, email, {
+                        "type": "error",
+                        "message": f"Le mot doit faire {len(mot_secret)} lettres"
+                    })
+                    continue
 
-    gagne = all(c["etat"] == "correct" for c in correction)
-    perdu = len(game["tentatives"]) >= 6 and not gagne
+                player_state = lobby["joueurs_state"].get(email)
+                if not player_state or player_state["termine"]:
+                    continue
 
-    response = GuessResponse(
-        correction=correction,
-        gagne=gagne,
-        perdu=perdu,
-        tentatives_restantes=6 - len(game["tentatives"])
-    )
+                # Process guess
+                correction = corriger_guess(mot_secret, guess)
+                player_state["tentatives"].append({
+                    "mot": guess,
+                    "correction": correction
+                })
 
-    if gagne or perdu:
-        game["termine"] = True
-        game["gagne"] = gagne
+                gagne = all(c["etat"] == "correct" for c in correction)
+                perdu = len(player_state["tentatives"]) >= 6 and not gagne
 
-        # Update stats
-        email = game["email"]
-        if email in stats_db:
-            stats_db[email]["parties"] += 1
-            if gagne:
-                stats_db[email]["victoires"] += 1
-                score = max(0, 100 - (len(game["tentatives"]) - 1) * 15)
-                stats_db[email]["meilleurScore"] = max(stats_db[email]["meilleurScore"], score)
-                response.score = score
+                # Send result to player
+                result = {
+                    "type": "guess_result",
+                    "correction": correction,
+                    "gagne": gagne,
+                    "perdu": perdu,
+                    "tentatives_count": len(player_state["tentatives"])
+                }
 
-                # Update lobby score
-                lobby_code = game["lobby_code"]
-                if lobby_code in lobbies_db:
-                    lobby = lobbies_db[lobby_code]
+                if gagne:
+                    score = max(0, 100 - (len(player_state["tentatives"]) - 1) * 15)
+                    result["score"] = score
+                    player_state["termine"] = True
+                    player_state["gagne"] = True
+                    lobby["joueurs_finis"].append(email)
+
+                    # Update stats
+                    if email in stats_db:
+                        stats_db[email]["parties"] += 1
+                        stats_db[email]["victoires"] += 1
+                        stats_db[email]["meilleurScore"] = max(stats_db[email]["meilleurScore"], score)
+
+                    # Update lobby score
                     for joueur in lobby["joueurs"]:
                         if joueur["email"] == email:
                             joueur["score"] += score
                             break
 
-        if perdu:
-            response.mot_secret = mot_secret
+                elif perdu:
+                    result["mot_secret"] = mot_secret
+                    player_state["termine"] = True
+                    player_state["gagne"] = False
+                    lobby["joueurs_finis"].append(email)
 
-    return response
+                    # Update stats
+                    if email in stats_db:
+                        stats_db[email]["parties"] += 1
 
+                await manager.send_to_player(lobby_code, email, result)
 
-@app.get("/game/{game_id}")
-def get_game(game_id: str):
-    if game_id not in games_db:
-        raise HTTPException(status_code=404, detail="Game not found")
+                # Broadcast progress to others (without revealing letters)
+                await manager.broadcast_to_lobby(lobby_code, {
+                    "type": "player_progress",
+                    "email": email,
+                    "nom": user["nom"],
+                    "tentatives_count": len(player_state["tentatives"]),
+                    "termine": player_state["termine"],
+                    "gagne": player_state["gagne"]
+                }, exclude_email=email)
 
-    game = games_db[game_id]
-    return {
-        "longueur": len(game["mot_secret"]),
-        "tentatives": game["tentatives"],
-        "termine": game["termine"],
-        "gagne": game["gagne"],
-        "tentatives_restantes": 6 - len(game["tentatives"])
-    }
+                # Check if all players finished
+                all_finished = all(
+                    lobby["joueurs_state"].get(j["email"], {}).get("termine", False)
+                    for j in lobby["joueurs"]
+                )
+
+                if all_finished:
+                    lobby["en_jeu"] = False
+                    # Build final results
+                    results = []
+                    for joueur in lobby["joueurs"]:
+                        state = lobby["joueurs_state"].get(joueur["email"], {})
+                        results.append({
+                            "email": joueur["email"],
+                            "nom": joueur["nom"],
+                            "gagne": state.get("gagne", False),
+                            "tentatives": len(state.get("tentatives", [])),
+                            "score": joueur["score"]
+                        })
+
+                    # Sort by: winners first, then by fewer attempts
+                    results.sort(key=lambda x: (not x["gagne"], x["tentatives"]))
+
+                    await manager.broadcast_to_lobby(lobby_code, {
+                        "type": "game_ended",
+                        "mot_secret": mot_secret,
+                        "results": results,
+                        "joueurs": lobby["joueurs"]
+                    })
+
+            elif msg_type == "chat":
+                # Optional: chat messages
+                message = data.get("message", "")
+                await manager.broadcast_to_lobby(lobby_code, {
+                    "type": "chat",
+                    "email": email,
+                    "nom": user["nom"],
+                    "message": message
+                })
+
+    except WebSocketDisconnect:
+        manager.disconnect(lobby_code, email)
+        # Notify others
+        await manager.broadcast_to_lobby(lobby_code, {
+            "type": "player_left",
+            "email": email,
+            "nom": user["nom"]
+        })
 
 
 if __name__ == "__main__":
