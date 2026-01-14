@@ -22,30 +22,26 @@ echo Installation des dependances...
 call venv\Scripts\activate.bat
 pip install -r backend\requirements.txt -q
 
-:: Start backend server
-echo Demarrage du serveur backend sur http://localhost:8000...
-start "Wordle Backend" cmd /k "cd backend && python -m uvicorn main:app --host 0.0.0.0 --port 8000"
-
-:: Wait for backend to start
-timeout /t 3 /nobreak >nul
-
-:: Start frontend server
-echo Demarrage du serveur frontend sur http://localhost:3000...
-start "Wordle Frontend" cmd /k "cd frontend && python -m http.server 3000"
+:: Get local IP
+for /f "tokens=2 delims=:" %%a in ('ipconfig ^| findstr /c:"IPv4"') do (
+    set LOCAL_IP=%%a
+    goto :found
+)
+:found
+set LOCAL_IP=%LOCAL_IP:~1%
 
 echo.
 echo ===============================
-echo   Serveurs demarres!
+echo   Server is running!
 echo ===============================
 echo.
-echo   Frontend: http://localhost:3000
-echo   Backend API: http://localhost:8000
-echo   API Docs: http://localhost:8000/docs
+echo   Local:   http://localhost:8000
+echo   Network: http://%LOCAL_IP%:8000
 echo.
-echo   Fermez les fenetres de commande pour arreter les serveurs
+echo   Share the Network URL with friends!
+echo.
+echo   Press Ctrl+C to stop
 echo.
 
-:: Open browser
-start http://localhost:3000
-
-pause
+cd backend
+python -m uvicorn main:app --host 0.0.0.0 --port 8000

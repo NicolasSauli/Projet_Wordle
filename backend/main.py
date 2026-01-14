@@ -1,5 +1,7 @@
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, EmailStr
 from typing import Optional
 import random
@@ -7,8 +9,13 @@ import string
 import json
 import hashlib
 import asyncio
+import os
 
-app = FastAPI(title="Wordle API", version="2.0.0")
+app = FastAPI(title="Wordle API", version="2.1.0")
+
+# Get the directory where this script is located
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+FRONTEND_DIR = os.path.join(BASE_DIR, "..", "frontend")
 
 # CORS middleware for frontend
 app.add_middleware(
@@ -165,11 +172,6 @@ def corriger_guess(mot_secret: str, guess: str) -> list[dict]:
 
 
 # REST Routes
-@app.get("/")
-def root():
-    return {"message": "Wordle API v2.0 with WebSockets"}
-
-
 @app.post("/auth/register", response_model=UserResponse)
 def register(user: UserRegister):
     if user.email in users_db:
@@ -435,6 +437,12 @@ async def websocket_endpoint(websocket: WebSocket, lobby_code: str, email: str):
             "email": email,
             "nom": user["nom"]
         })
+
+
+# Serve frontend
+@app.get("/")
+def serve_frontend():
+    return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))
 
 
 if __name__ == "__main__":
