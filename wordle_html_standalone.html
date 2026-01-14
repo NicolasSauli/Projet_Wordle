@@ -4,9 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Wordle Multijoueur</title>
-    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -16,17 +13,30 @@
 <body>
     <div id="root"></div>
     
-    <script type="text/babel">
-        const { useState, useEffect } = React;
+    <script>
+        const state = {
+            page: 'home',
+            user: null,
+            lobby: null,
+            partie: null,
+            tentatives: [],
+            currentGuess: '',
+            message: '',
+            stats: { victoires: 0, parties: 0, meilleurScore: 0 },
+            gameOver: false
+        };
 
         const MOTS_DISPONIBLES = [
             "ARBRE", "BOIRE", "CHIEN", "DROIT", "ECOLE", 
             "FLEUR", "GRAND", "HIVER", "JOUER", "LIVRE",
             "MAGIE", "NAGER", "ORDRE", "PAINS", "RONDE",
-            "TEMPS", "UTILE", "VENIR", "WAGON", "ZONES"
+            "TEMPS", "UTILE", "VENIR", "WAGON", "ZONES",
+            "PLAGE", "SOLEIL", "MONTAGNE", "PROFESSEUR", "ORDINATEUR",
+            "SOURIS", "CLAVIER", "ECRAN", "VOITURE", "TRAIN",
+            "AVION", "BATEAU", "PORTE", "FENETRE", "MAISON"
         ];
 
-        // Système de stockage simplifié en localStorage
+        // Système de stockage
         const storage = {
             get: (key) => {
                 const data = localStorage.getItem(key);
@@ -37,547 +47,556 @@
             }
         };
 
-        const WordleApp = () => {
-            const [page, setPage] = useState('home');
-            const [user, setUser] = useState(null);
-            const [lobby, setLobby] = useState(null);
-            const [partie, setPartie] = useState(null);
-            const [tentatives, setTentatives] = useState([]);
-            const [currentGuess, setCurrentGuess] = useState('');
-            const [message, setMessage] = useState('');
-            const [stats, setStats] = useState({ victoires: 0, parties: 0, meilleurScore: 0 });
-            const [gameOver, setGameOver] = useState(false);
+        // Initialisation
+        function init() {
+            loadUserData();
+            render();
+        }
 
-            useEffect(() => {
-                loadUserData();
-            }, []);
+        function loadUserData() {
+            const userData = storage.get('currentUser');
+            if (userData) {
+                state.user = userData;
+                loadStats(userData.email);
+                state.page = 'menu';
+            }
+        }
 
-            const loadUserData = () => {
-                const userData = storage.get('currentUser');
-                if (userData) {
-                    setUser(userData);
-                    loadStats(userData.email);
+        function loadStats(email) {
+            const statsData = storage.get(`stats:${email}`);
+            if (statsData) {
+                state.stats = statsData;
+            }
+        }
+
+        function saveStats(email, newStats) {
+            storage.set(`stats:${email}`, newStats);
+            state.stats = newStats;
+        }
+
+        function showMessage(msg) {
+            state.message = msg;
+            render();
+            setTimeout(() => {
+                state.message = '';
+                render();
+            }, 3000);
+        }
+
+        function setPage(page) {
+            state.page = page;
+            render();
+        }
+
+        function registerUser(email, nom, prenom) {
+            const newUser = { email, nom, prenom };
+            storage.set('currentUser', newUser);
+            state.user = newUser;
+            state.page = 'menu';
+            showMessage(`Bienvenue ${prenom} ${nom}!`);
+        }
+
+        function createLobby(nomLobby) {
+            const code = Math.floor(100000 + Math.random() * 900000).toString();
+            const newLobby = {
+                code,
+                nom: nomLobby,
+                createur: state.user.email,
+                joueurs: [{ email: state.user.email, nom: state.user.nom, score: 0 }]
+            };
+            
+            storage.set(`lobby:${code}`, newLobby);
+            state.lobby = newLobby;
+            state.page = 'lobby';
+            showMessage(`Lobby créé! Code: ${code}`);
+        }
+
+        function joinLobby(code) {
+            const existingLobby = storage.get(`lobby:${code}`);
+            if (!existingLobby) {
+                showMessage('Lobby introuvable!');
+                return;
+            }
+            
+            const alreadyJoined = existingLobby.joueurs.some(j => j.email === state.user.email);
+            
+            if (!alreadyJoined) {
+                existingLobby.joueurs.push({ email: state.user.email, nom: state.user.nom, score: 0 });
+                storage.set(`lobby:${code}`, existingLobby);
+            }
+            
+            state.lobby = existingLobby;
+            state.page = 'lobby';
+            showMessage('Lobby rejoint!');
+        }
+
+        function startPartie() {
+            const motSecret = MOTS_DISPONIBLES[Math.floor(Math.random() * MOTS_DISPONIBLES.length)];
+            state.partie = {
+                motSecret,
+                longueur: motSecret.length,
+                termine: false,
+                gagnant: null
+            };
+            
+            state.tentatives = [];
+            state.currentGuess = '';
+            state.gameOver = false;
+            state.page = 'jeu';
+            render();
+        }
+
+        function corrigerGuess(motSecret, guess) {
+            const result = [];
+            const lettresSecrets = motSecret.split('');
+            const guessUpper = guess.toUpperCase();
+            const lettresUtilisees = [...lettresSecrets];
+            
+            for (let i = 0; i < guessUpper.length; i++) {
+                if (guessUpper[i] === lettresSecrets[i]) {
+                    result[i] = 'correct';
+                    lettresUtilisees[i] = null;
                 }
-            };
-
-            const loadStats = (email) => {
-                const statsData = storage.get(`stats:${email}`);
-                if (statsData) {
-                    setStats(statsData);
-                }
-            };
-
-            const saveStats = (email, newStats) => {
-                storage.set(`stats:${email}`, newStats);
-                setStats(newStats);
-            };
-
-            const showMessage = (msg) => {
-                setMessage(msg);
-                setTimeout(() => setMessage(''), 3000);
-            };
-
-            const registerUser = (email, nom, prenom) => {
-                const newUser = { email, nom, prenom };
-                storage.set('currentUser', newUser);
-                setUser(newUser);
-                setPage('menu');
-                showMessage(`Bienvenue ${prenom} ${nom}!`);
-            };
-
-            const createLobby = (nomLobby) => {
-                const code = Math.floor(100000 + Math.random() * 900000).toString();
-                const newLobby = {
-                    code,
-                    nom: nomLobby,
-                    createur: user.email,
-                    joueurs: [{ email: user.email, nom: user.nom, score: 0 }]
-                };
-                
-                storage.set(`lobby:${code}`, newLobby);
-                setLobby(newLobby);
-                setPage('lobby');
-                showMessage(`Lobby créé! Code: ${code}`);
-            };
-
-            const joinLobby = (code) => {
-                const existingLobby = storage.get(`lobby:${code}`);
-                if (!existingLobby) {
-                    showMessage('Lobby introuvable!');
-                    return;
-                }
-                
-                const alreadyJoined = existingLobby.joueurs.some(j => j.email === user.email);
-                
-                if (!alreadyJoined) {
-                    existingLobby.joueurs.push({ email: user.email, nom: user.nom, score: 0 });
-                    storage.set(`lobby:${code}`, existingLobby);
-                }
-                
-                setLobby(existingLobby);
-                setPage('lobby');
-                showMessage('Lobby rejoint!');
-            };
-
-            const startPartie = () => {
-                const motSecret = MOTS_DISPONIBLES[Math.floor(Math.random() * MOTS_DISPONIBLES.length)];
-                const newPartie = {
-                    motSecret,
-                    longueur: motSecret.length,
-                    termine: false,
-                    gagnant: null
-                };
-                
-                setPartie(newPartie);
-                setTentatives([]);
-                setCurrentGuess('');
-                setGameOver(false);
-                setPage('jeu');
-            };
-
-            const corrigerGuess = (motSecret, guess) => {
-                const result = [];
-                const lettresSecrets = motSecret.split('');
-                const guessUpper = guess.toUpperCase();
-                const lettresUtilisees = [...lettresSecrets];
-                
-                for (let i = 0; i < guessUpper.length; i++) {
-                    if (guessUpper[i] === lettresSecrets[i]) {
-                        result[i] = 'correct';
-                        lettresUtilisees[i] = null;
+            }
+            
+            for (let i = 0; i < guessUpper.length; i++) {
+                if (!result[i]) {
+                    const idx = lettresUtilisees.indexOf(guessUpper[i]);
+                    if (idx !== -1) {
+                        result[i] = 'present';
+                        lettresUtilisees[idx] = null;
+                    } else {
+                        result[i] = 'absent';
                     }
                 }
-                
-                for (let i = 0; i < guessUpper.length; i++) {
-                    if (!result[i]) {
-                        const idx = lettresUtilisees.indexOf(guessUpper[i]);
-                        if (idx !== -1) {
-                            result[i] = 'present';
-                            lettresUtilisees[idx] = null;
-                        } else {
-                            result[i] = 'absent';
-                        }
-                    }
-                }
-                
-                return result;
-            };
+            }
+            
+            return result;
+        }
 
-            const submitGuess = () => {
-                if (currentGuess.length !== partie.longueur) {
-                    showMessage(`Le mot doit faire ${partie.longueur} lettres!`);
-                    return;
-                }
+        function submitGuess() {
+            if (state.currentGuess.length !== state.partie.longueur) {
+                showMessage(`Le mot doit faire ${state.partie.longueur} lettres!`);
+                return;
+            }
 
-                const correction = corrigerGuess(partie.motSecret, currentGuess);
-                const newTentatives = [...tentatives, { mot: currentGuess.toUpperCase(), correction }];
-                setTentatives(newTentatives);
-                setCurrentGuess('');
+            const correction = corrigerGuess(state.partie.motSecret, state.currentGuess);
+            state.tentatives.push({ mot: state.currentGuess.toUpperCase(), correction });
+            state.currentGuess = '';
 
-                const gagne = correction.every(c => c === 'correct');
+            const gagne = correction.every(c => c === 'correct');
+            
+            if (gagne) {
+                const score = Math.max(0, 100 - (state.tentatives.length - 1) * 15);
+                const newStats = {
+                    victoires: state.stats.victoires + 1,
+                    parties: state.stats.parties + 1,
+                    meilleurScore: Math.max(state.stats.meilleurScore, score)
+                };
                 
-                if (gagne) {
-                    const score = Math.max(0, 100 - (newTentatives.length - 1) * 15);
-                    const newStats = {
-                        victoires: stats.victoires + 1,
-                        parties: stats.parties + 1,
-                        meilleurScore: Math.max(stats.meilleurScore, score)
-                    };
-                    
-                    saveStats(user.email, newStats);
-                    
-                    const updatedLobby = { ...lobby };
-                    const joueurIdx = updatedLobby.joueurs.findIndex(j => j.email === user.email);
+                saveStats(state.user.email, newStats);
+                
+                if (state.lobby) {
+                    const joueurIdx = state.lobby.joueurs.findIndex(j => j.email === state.user.email);
                     if (joueurIdx !== -1) {
-                        updatedLobby.joueurs[joueurIdx].score += score;
+                        state.lobby.joueurs[joueurIdx].score += score;
                     }
-                    storage.set(`lobby:${lobby.code}`, updatedLobby);
-                    setLobby(updatedLobby);
-                    
-                    setGameOver(true);
-                    showMessage(`🎉 Bravo! Trouvé en ${newTentatives.length} essais! +${score} points`);
-                } else if (newTentatives.length >= 6) {
-                    const newStats = {
-                        ...stats,
-                        parties: stats.parties + 1
-                    };
-                    saveStats(user.email, newStats);
-                    setGameOver(true);
-                    showMessage(`Perdu! Le mot était: ${partie.motSecret}`);
+                    storage.set(`lobby:${state.lobby.code}`, state.lobby);
                 }
-            };
-
-            const handleKeyPress = (lettre) => {
-                if (gameOver) return;
                 
-                if (lettre === 'ENTER') {
-                    submitGuess();
-                } else if (lettre === 'BACK') {
-                    setCurrentGuess(prev => prev.slice(0, -1));
-                } else if (currentGuess.length < partie.longueur) {
-                    setCurrentGuess(prev => prev + lettre);
-                }
-            };
+                state.gameOver = true;
+                showMessage(`🎉 Bravo! Trouvé en ${state.tentatives.length} essais! +${score} points`);
+            } else if (state.tentatives.length >= 6) {
+                const newStats = {
+                    ...state.stats,
+                    parties: state.stats.parties + 1
+                };
+                saveStats(state.user.email, newStats);
+                state.gameOver = true;
+                showMessage(`Perdu! Le mot était: ${state.partie.motSecret}`);
+            }
+            
+            render();
+        }
 
-            const HomePage = () => (
-                <div className="min-h-screen bg-gradient-to-br from-blue-600 to-purple-700 flex items-center justify-center p-4">
-                    <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full">
-                        <div className="text-center mb-8">
-                            <h1 className="text-5xl font-bold text-gray-800 mb-2">WORDLE</h1>
-                            <p className="text-gray-600">Multijoueur</p>
+        function handleKeyPress(lettre) {
+            if (state.gameOver) return;
+            
+            if (lettre === 'ENTER') {
+                submitGuess();
+            } else if (lettre === 'BACK') {
+                state.currentGuess = state.currentGuess.slice(0, -1);
+            } else if (state.currentGuess.length < state.partie.longueur) {
+                state.currentGuess += lettre;
+            }
+            
+            render();
+        }
+
+        // Fonctions de rendu
+        function renderHomePage() {
+            return `
+                <div class="min-h-screen bg-gradient-to-br from-blue-600 to-purple-700 flex items-center justify-center p-4">
+                    <div class="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full">
+                        <div class="text-center mb-8">
+                            <h1 class="text-5xl font-bold text-gray-800 mb-2">WORDLE</h1>
+                            <p class="text-gray-600">Multijoueur</p>
                         </div>
                         
-                        <div className="space-y-4">
-                            <button
-                                onClick={() => setPage('register')}
-                                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-lg transition"
-                            >
+                        <div class="space-y-4">
+                            <button onclick="setPage('register')" 
+                                class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-lg transition">
                                 S'inscrire
                             </button>
                             
-                            <button
-                                onClick={() => setPage('login')}
-                                className="w-full bg-gray-600 hover:bg-gray-700 text-white font-semibold py-3 px-6 rounded-lg transition"
-                            >
+                            <button onclick="setPage('login')" 
+                                class="w-full bg-gray-600 hover:bg-gray-700 text-white font-semibold py-3 px-6 rounded-lg transition">
                                 Se connecter
                             </button>
                         </div>
                     </div>
                 </div>
-            );
+            `;
+        }
 
-            const RegisterPage = () => {
-                const [formData, setFormData] = useState({ email: '', nom: '', prenom: '' });
-                
-                const handleSubmit = () => {
-                    if (formData.email && formData.nom && formData.prenom) {
-                        registerUser(formData.email, formData.nom, formData.prenom);
-                    }
-                };
-
-                return (
-                    <div className="min-h-screen bg-gradient-to-br from-green-600 to-teal-700 flex items-center justify-center p-4">
-                        <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full">
-                            <h2 className="text-3xl font-bold text-gray-800 mb-6">Inscription</h2>
+        function renderRegisterPage() {
+            return `
+                <div class="min-h-screen bg-gradient-to-br from-green-600 to-teal-700 flex items-center justify-center p-4">
+                    <div class="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full">
+                        <h2 class="text-3xl font-bold text-gray-800 mb-6">Inscription</h2>
+                        
+                        <div class="space-y-4">
+                            <input type="email" id="emailInput" placeholder="Email" 
+                                class="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-green-500 focus:outline-none">
+                            <input type="text" id="nomInput" placeholder="Nom"
+                                class="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-green-500 focus:outline-none">
+                            <input type="text" id="prenomInput" placeholder="Prénom"
+                                class="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-green-500 focus:outline-none">
                             
-                            <div className="space-y-4">
-                                <input
-                                    type="email"
-                                    placeholder="Email"
-                                    value={formData.email}
-                                    onChange={(e) => setFormData({...formData, email: e.target.value})}
-                                    className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-green-500 focus:outline-none"
-                                />
-                                <input
-                                    type="text"
-                                    placeholder="Nom"
-                                    value={formData.nom}
-                                    onChange={(e) => setFormData({...formData, nom: e.target.value})}
-                                    className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-green-500 focus:outline-none"
-                                />
-                                <input
-                                    type="text"
-                                    placeholder="Prénom"
-                                    value={formData.prenom}
-                                    onChange={(e) => setFormData({...formData, prenom: e.target.value})}
-                                    onKeyPress={(e) => e.key === 'Enter' && handleSubmit()}
-                                    className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-green-500 focus:outline-none"
-                                />
-                                
-                                <button
-                                    onClick={handleSubmit}
-                                    className="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 rounded-lg transition"
-                                >
-                                    Créer mon compte
-                                </button>
-                            </div>
-                            
-                            <button
-                                onClick={() => setPage('home')}
-                                className="w-full mt-4 text-gray-600 hover:text-gray-800"
-                            >
-                                Retour
+                            <button onclick="handleRegister()" 
+                                class="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 rounded-lg transition">
+                                Créer mon compte
                             </button>
                         </div>
+                        
+                        <button onclick="setPage('home')"
+                            class="w-full mt-4 text-gray-600 hover:text-gray-800">
+                            Retour
+                        </button>
                     </div>
-                );
-            };
+                </div>
+            `;
+        }
 
-            const MenuPage = () => (
-                <div className="min-h-screen bg-gradient-to-br from-purple-600 to-pink-700 p-4">
-                    <div className="max-w-4xl mx-auto">
-                        <div className="bg-white rounded-2xl shadow-2xl p-8 mb-6">
-                            <div className="flex items-center justify-between mb-6">
+        function handleRegister() {
+            const email = document.getElementById('emailInput').value;
+            const nom = document.getElementById('nomInput').value;
+            const prenom = document.getElementById('prenomInput').value;
+            
+            if (email && nom && prenom) {
+                registerUser(email, nom, prenom);
+            }
+        }
+
+        function renderMenuPage() {
+            return `
+                <div class="min-h-screen bg-gradient-to-br from-purple-600 to-pink-700 p-4">
+                    <div class="max-w-4xl mx-auto">
+                        <div class="bg-white rounded-2xl shadow-2xl p-8 mb-6">
+                            <div class="flex items-center justify-between mb-6">
                                 <div>
-                                    <h2 className="text-3xl font-bold text-gray-800">Bienvenue {user?.prenom}!</h2>
-                                    <p className="text-gray-600">{user?.email}</p>
+                                    <h2 class="text-3xl font-bold text-gray-800">Bienvenue ${state.user.prenom}!</h2>
+                                    <p class="text-gray-600">${state.user.email}</p>
                                 </div>
-                                <button
-                                    onClick={() => {
-                                        setUser(null);
-                                        setPage('home');
-                                    }}
-                                    className="text-red-600 hover:text-red-800"
-                                >
+                                <button onclick="handleLogout()" class="text-red-600 hover:text-red-800">
                                     Déconnexion
                                 </button>
                             </div>
                             
-                            <div className="grid grid-cols-3 gap-4 mb-6">
-                                <div className="bg-blue-100 p-4 rounded-lg text-center">
-                                    <div className="text-2xl font-bold text-gray-800">{stats.victoires}</div>
-                                    <div className="text-sm text-gray-600">Victoires</div>
+                            <div class="grid grid-cols-3 gap-4 mb-6">
+                                <div class="bg-blue-100 p-4 rounded-lg text-center">
+                                    <div class="text-2xl font-bold text-gray-800">${state.stats.victoires}</div>
+                                    <div class="text-sm text-gray-600">Victoires</div>
                                 </div>
-                                <div className="bg-green-100 p-4 rounded-lg text-center">
-                                    <div className="text-2xl font-bold text-gray-800">{stats.parties}</div>
-                                    <div className="text-sm text-gray-600">Parties</div>
+                                <div class="bg-green-100 p-4 rounded-lg text-center">
+                                    <div class="text-2xl font-bold text-gray-800">${state.stats.parties}</div>
+                                    <div class="text-sm text-gray-600">Parties</div>
                                 </div>
-                                <div className="bg-yellow-100 p-4 rounded-lg text-center">
-                                    <div className="text-2xl font-bold text-gray-800">{stats.meilleurScore}</div>
-                                    <div className="text-sm text-gray-600">Meilleur Score</div>
+                                <div class="bg-yellow-100 p-4 rounded-lg text-center">
+                                    <div class="text-2xl font-bold text-gray-800">${state.stats.meilleurScore}</div>
+                                    <div class="text-sm text-gray-600">Meilleur Score</div>
                                 </div>
                             </div>
                         </div>
                         
-                        <div className="grid md:grid-cols-2 gap-6">
-                            <button
-                                onClick={() => setPage('createLobby')}
-                                className="bg-white hover:bg-gray-50 rounded-2xl shadow-lg p-8 text-center transition"
-                            >
-                                <h3 className="text-2xl font-bold text-gray-800 mb-2">Créer un Lobby</h3>
-                                <p className="text-gray-600">Invitez vos amis à jouer</p>
+                        <div class="grid md:grid-cols-2 gap-6">
+                            <button onclick="setPage('createLobby')"
+                                class="bg-white hover:bg-gray-50 rounded-2xl shadow-lg p-8 text-center transition">
+                                <h3 class="text-2xl font-bold text-gray-800 mb-2">Créer un Lobby</h3>
+                                <p class="text-gray-600">Invitez vos amis à jouer</p>
                             </button>
                             
-                            <button
-                                onClick={() => setPage('joinLobby')}
-                                className="bg-white hover:bg-gray-50 rounded-2xl shadow-lg p-8 text-center transition"
-                            >
-                                <h3 className="text-2xl font-bold text-gray-800 mb-2">Rejoindre un Lobby</h3>
-                                <p className="text-gray-600">Entrez un code de lobby</p>
+                            <button onclick="setPage('joinLobby')"
+                                class="bg-white hover:bg-gray-50 rounded-2xl shadow-lg p-8 text-center transition">
+                                <h3 class="text-2xl font-bold text-gray-800 mb-2">Rejoindre un Lobby</h3>
+                                <p class="text-gray-600">Entrez un code de lobby</p>
                             </button>
                         </div>
                     </div>
                 </div>
-            );
+            `;
+        }
 
-            const CreateLobbyPage = () => {
-                const [nomLobby, setNomLobby] = useState('');
-                
-                return (
-                    <div className="min-h-screen bg-gradient-to-br from-indigo-600 to-blue-700 flex items-center justify-center p-4">
-                        <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full">
-                            <h2 className="text-3xl font-bold text-gray-800 mb-6">Créer un Lobby</h2>
-                            
-                            <input
-                                type="text"
-                                placeholder="Nom du lobby"
-                                value={nomLobby}
-                                onChange={(e) => setNomLobby(e.target.value)}
-                                className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-indigo-500 focus:outline-none mb-4"
-                            />
-                            
-                            <button
-                                onClick={() => nomLobby && createLobby(nomLobby)}
-                                className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 rounded-lg transition mb-4"
-                            >
-                                Créer
-                            </button>
-                            
-                            <button
-                                onClick={() => setPage('menu')}
-                                className="w-full text-gray-600 hover:text-gray-800"
-                            >
-                                Retour
-                            </button>
-                        </div>
+        function handleLogout() {
+            state.user = null;
+            state.stats = { victoires: 0, parties: 0, meilleurScore: 0 };
+            setPage('home');
+        }
+
+        function renderCreateLobbyPage() {
+            return `
+                <div class="min-h-screen bg-gradient-to-br from-indigo-600 to-blue-700 flex items-center justify-center p-4">
+                    <div class="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full">
+                        <h2 class="text-3xl font-bold text-gray-800 mb-6">Créer un Lobby</h2>
+                        
+                        <input type="text" id="lobbyNameInput" placeholder="Nom du lobby"
+                            class="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-indigo-500 focus:outline-none mb-4">
+                        
+                        <button onclick="handleCreateLobby()"
+                            class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 rounded-lg transition mb-4">
+                            Créer
+                        </button>
+                        
+                        <button onclick="setPage('menu')"
+                            class="w-full text-gray-600 hover:text-gray-800">
+                            Retour
+                        </button>
                     </div>
-                );
-            };
+                </div>
+            `;
+        }
 
-            const JoinLobbyPage = () => {
-                const [code, setCode] = useState('');
-                
-                return (
-                    <div className="min-h-screen bg-gradient-to-br from-teal-600 to-green-700 flex items-center justify-center p-4">
-                        <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full">
-                            <h2 className="text-3xl font-bold text-gray-800 mb-6">Rejoindre un Lobby</h2>
-                            
-                            <input
-                                type="text"
-                                placeholder="Code du lobby (6 chiffres)"
-                                value={code}
-                                onChange={(e) => setCode(e.target.value)}
-                                maxLength={6}
-                                className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-teal-500 focus:outline-none mb-4"
-                            />
-                            
-                            <button
-                                onClick={() => code.length === 6 && joinLobby(code)}
-                                className="w-full bg-teal-600 hover:bg-teal-700 text-white font-semibold py-3 rounded-lg transition mb-4"
-                            >
-                                Rejoindre
-                            </button>
-                            
-                            <button
-                                onClick={() => setPage('menu')}
-                                className="w-full text-gray-600 hover:text-gray-800"
-                            >
-                                Retour
-                            </button>
-                        </div>
+        function handleCreateLobby() {
+            const nomLobby = document.getElementById('lobbyNameInput').value;
+            if (nomLobby) {
+                createLobby(nomLobby);
+            }
+        }
+
+        function renderJoinLobbyPage() {
+            return `
+                <div class="min-h-screen bg-gradient-to-br from-teal-600 to-green-700 flex items-center justify-center p-4">
+                    <div class="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full">
+                        <h2 class="text-3xl font-bold text-gray-800 mb-6">Rejoindre un Lobby</h2>
+                        
+                        <input type="text" id="lobbyCodeInput" placeholder="Code du lobby (6 chiffres)"
+                            maxlength="6" class="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-teal-500 focus:outline-none mb-4">
+                        
+                        <button onclick="handleJoinLobby()"
+                            class="w-full bg-teal-600 hover:bg-teal-700 text-white font-semibold py-3 rounded-lg transition mb-4">
+                            Rejoindre
+                        </button>
+                        
+                        <button onclick="setPage('menu')"
+                            class="w-full text-gray-600 hover:text-gray-800">
+                            Retour
+                        </button>
                     </div>
-                );
-            };
+                </div>
+            `;
+        }
 
-            const LobbyPage = () => (
-                <div className="min-h-screen bg-gradient-to-br from-orange-600 to-red-700 p-4">
-                    <div className="max-w-2xl mx-auto">
-                        <div className="bg-white rounded-2xl shadow-2xl p-8">
-                            <div className="mb-6">
-                                <h2 className="text-3xl font-bold text-gray-800 mb-2">{lobby.nom}</h2>
-                                <div className="text-xl font-mono bg-gray-100 p-3 rounded-lg text-center">
-                                    Code: <span className="font-bold text-orange-600">{lobby.code}</span>
+        function handleJoinLobby() {
+            const code = document.getElementById('lobbyCodeInput').value;
+            if (code.length === 6) {
+                joinLobby(code);
+            }
+        }
+
+        function renderLobbyPage() {
+            if (!state.lobby) return '';
+            
+            const joueursHtml = state.lobby.joueurs.map(joueur => `
+                <div class="bg-gray-50 p-3 rounded-lg flex justify-between items-center">
+                    <span class="font-semibold">${joueur.nom}</span>
+                    <span class="text-orange-600 font-bold">${joueur.score} pts</span>
+                </div>
+            `).join('');
+            
+            return `
+                <div class="min-h-screen bg-gradient-to-br from-orange-600 to-red-700 p-4">
+                    <div class="max-w-2xl mx-auto">
+                        <div class="bg-white rounded-2xl shadow-2xl p-8">
+                            <div class="mb-6">
+                                <h2 class="text-3xl font-bold text-gray-800 mb-2">${state.lobby.nom}</h2>
+                                <div class="text-xl font-mono bg-gray-100 p-3 rounded-lg text-center">
+                                    Code: <span class="font-bold text-orange-600">${state.lobby.code}</span>
                                 </div>
                             </div>
                             
-                            <div className="mb-6">
-                                <h3 className="text-xl font-bold text-gray-700 mb-3">Joueurs ({lobby.joueurs.length})</h3>
-                                <div className="space-y-2">
-                                    {lobby.joueurs.map((joueur, idx) => (
-                                        <div key={idx} className="bg-gray-50 p-3 rounded-lg flex justify-between items-center">
-                                            <span className="font-semibold">{joueur.nom}</span>
-                                            <span className="text-orange-600 font-bold">{joueur.score} pts</span>
-                                        </div>
-                                    ))}
+                            <div class="mb-6">
+                                <h3 class="text-xl font-bold text-gray-700 mb-3">Joueurs (${state.lobby.joueurs.length})</h3>
+                                <div class="space-y-2">
+                                    ${joueursHtml}
                                 </div>
                             </div>
                             
-                            <button
-                                onClick={startPartie}
-                                className="w-full bg-orange-600 hover:bg-orange-700 text-white font-semibold py-3 rounded-lg transition mb-4"
-                            >
+                            <button onclick="startPartie()"
+                                class="w-full bg-orange-600 hover:bg-orange-700 text-white font-semibold py-3 rounded-lg transition mb-4">
                                 Démarrer la partie
                             </button>
                             
-                            <button
-                                onClick={() => {
-                                    setLobby(null);
-                                    setPage('menu');
-                                }}
-                                className="w-full text-gray-600 hover:text-gray-800"
-                            >
+                            <button onclick="handleLeaveLobby()"
+                                class="w-full text-gray-600 hover:text-gray-800">
                                 Quitter le lobby
                             </button>
                         </div>
                     </div>
                 </div>
-            );
+            `;
+        }
 
-            const JeuPage = () => {
-                const clavier = [
-                    ['A', 'Z', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'],
-                    ['Q', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', 'M'],
-                    ['ENTER', 'W', 'X', 'C', 'V', 'B', 'N', 'BACK']
-                ];
+        function handleLeaveLobby() {
+            state.lobby = null;
+            setPage('menu');
+        }
 
-                return (
-                    <div className="min-h-screen bg-gradient-to-br from-slate-700 to-slate-900 p-4">
-                        <div className="max-w-lg mx-auto">
-                            <div className="bg-white rounded-2xl shadow-2xl p-6 mb-4">
-                                <div className="flex justify-between items-center mb-4">
-                                    <h2 className="text-2xl font-bold text-gray-800">WORDLE</h2>
-                                    <div className="text-sm text-gray-600">
-                                        Essai {tentatives.length + 1}/6
-                                    </div>
+        function renderJeuPage() {
+            if (!state.partie) return '';
+            
+            const clavier = [
+                ['A', 'Z', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'],
+                ['Q', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', 'M'],
+                ['ENTER', 'W', 'X', 'C', 'V', 'B', 'N', 'BACK']
+            ];
+
+            let grilleHtml = '';
+            for (let rowIdx = 0; rowIdx < 6; rowIdx++) {
+                grilleHtml += '<div class="flex gap-2 justify-center">';
+                for (let colIdx = 0; colIdx < state.partie.longueur; colIdx++) {
+                    const tentative = state.tentatives[rowIdx];
+                    const isCurrentRow = rowIdx === state.tentatives.length;
+                    const lettre = tentative ? tentative.mot[colIdx] : (isCurrentRow && state.currentGuess[colIdx]) || '';
+                    const etat = tentative ? tentative.correction[colIdx] : '';
+                    
+                    let classColor = 'border-gray-300';
+                    if (etat === 'correct') classColor = 'bg-green-500 text-white border-green-500';
+                    else if (etat === 'present') classColor = 'bg-yellow-500 text-white border-yellow-500';
+                    else if (etat === 'absent') classColor = 'bg-gray-400 text-white border-gray-400';
+                    else if (lettre) classColor = 'border-gray-400';
+                    
+                    grilleHtml += `
+                        <div class="w-14 h-14 border-2 rounded flex items-center justify-center text-2xl font-bold ${classColor}">
+                            ${lettre}
+                        </div>
+                    `;
+                }
+                grilleHtml += '</div>';
+            }
+
+            let clavierHtml = '';
+            for (const row of clavier) {
+                clavierHtml += '<div class="flex gap-1 justify-center">';
+                for (const lettre of row) {
+                    const width = (lettre === 'ENTER' || lettre === 'BACK') ? 'px-4' : 'w-10';
+                    const disabled = state.gameOver ? 'disabled:bg-gray-200 disabled:cursor-not-allowed opacity-50' : '';
+                    const displayLettre = lettre === 'BACK' ? '←' : lettre;
+                    clavierHtml += `
+                        <button onclick="handleKeyPress('${lettre}')" ${state.gameOver ? 'disabled' : ''}
+                            class="${width} h-12 bg-gray-300 hover:bg-gray-400 ${disabled} font-semibold rounded text-sm transition">
+                            ${displayLettre}
+                        </button>
+                    `;
+                }
+                clavierHtml += '</div>';
+            }
+
+            const gameOverBtn = state.gameOver ? `
+                <div class="mb-4 p-4 bg-blue-100 rounded-lg text-center">
+                    <button onclick="handleRetourLobby()"
+                        class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-6 rounded-lg">
+                        Retour au lobby
+                    </button>
+                </div>
+            ` : '';
+
+            return `
+                <div class="min-h-screen bg-gradient-to-br from-slate-700 to-slate-900 p-4">
+                    <div class="max-w-lg mx-auto">
+                        <div class="bg-white rounded-2xl shadow-2xl p-6 mb-4">
+                            <div class="flex justify-between items-center mb-4">
+                                <h2 class="text-2xl font-bold text-gray-800">WORDLE</h2>
+                                <div class="text-sm text-gray-600">
+                                    Essai ${state.tentatives.length + 1}/6
                                 </div>
-                                
-                                <div className="space-y-2 mb-6">
-                                    {[...Array(6)].map((_, rowIdx) => (
-                                        <div key={rowIdx} className="flex gap-2 justify-center">
-                                            {[...Array(partie.longueur)].map((_, colIdx) => {
-                                                const tentative = tentatives[rowIdx];
-                                                const isCurrentRow = rowIdx === tentatives.length;
-                                                const lettre = tentative ? tentative.mot[colIdx] : (isCurrentRow && currentGuess[colIdx]) || '';
-                                                const etat = tentative ? tentative.correction[colIdx] : '';
-                                                
-                                                return (
-                                                    <div
-                                                        key={colIdx}
-                                                        className={`w-14 h-14 border-2 rounded flex items-center justify-center text-2xl font-bold
-                                                            ${etat === 'correct' ? 'bg-green-500 text-white border-green-500' : ''}
-                                                            ${etat === 'present' ? 'bg-yellow-500 text-white border-yellow-500' : ''}
-                                                            ${etat === 'absent' ? 'bg-gray-400 text-white border-gray-400' : ''}
-                                                            ${!etat && lettre ? 'border-gray-400' : 'border-gray-300'}
-                                                        `}
-                                                    >
-                                                        {lettre}
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-                                    ))}
-                                </div>
-                                
-                                {gameOver && (
-                                    <div className="mb-4 p-4 bg-blue-100 rounded-lg text-center">
-                                        <button
-                                            onClick={() => setPage('lobby')}
-                                            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-6 rounded-lg"
-                                        >
-                                            Retour au lobby
-                                        </button>
-                                    </div>
-                                )}
                             </div>
                             
-                            <div className="bg-white rounded-2xl shadow-2xl p-4">
-                                <div className="space-y-2">
-                                    {clavier.map((row, idx) => (
-                                        <div key={idx} className="flex gap-1 justify-center">
-                                            {row.map((lettre) => (
-                                                <button
-                                                    key={lettre}
-                                                    onClick={() => handleKeyPress(lettre)}
-                                                    disabled={gameOver}
-                                                    className={`
-                                                        ${lettre === 'ENTER' || lettre === 'BACK' ? 'px-4' : 'w-10'} 
-                                                        h-12 bg-gray-300 hover:bg-gray-400 disabled:bg-gray-200 disabled:cursor-not-allowed
-                                                        font-semibold rounded text-sm transition
-                                                    `}
-                                                >
-                                                    {lettre === 'BACK' ? '←' : lettre}
-                                                </button>
-                                            ))}
-                                        </div>
-                                    ))}
-                                </div>
+                            <div class="space-y-2 mb-6">
+                                ${grilleHtml}
+                            </div>
+                            
+                            ${gameOverBtn}
+                        </div>
+                        
+                        <div class="bg-white rounded-2xl shadow-2xl p-4">
+                            <div class="space-y-2">
+                                ${clavierHtml}
                             </div>
                         </div>
                     </div>
-                );
-            };
-
-            return (
-                <div className="relative">
-                    {message && (
-                        <div className="fixed top-4 left-1/2 transform -translate-x-1/2 bg-black text-white px-6 py-3 rounded-lg shadow-lg z-50">
-                            {message}
-                        </div>
-                    )}
-                    
-                    {page === 'home' && <HomePage />}
-                    {page === 'register' && <RegisterPage />}
-                    {page === 'login' && <RegisterPage />}
-                    {page === 'menu' && <MenuPage />}
-                    {page === 'createLobby' && <CreateLobbyPage />}
-                    {page === 'joinLobby' && <JoinLobbyPage />}
-                    {page === 'lobby' && <LobbyPage />}
-                    {page === 'jeu' && <JeuPage />}
                 </div>
-            );
-        };
+            `;
+        }
 
-        ReactDOM.render(<WordleApp />, document.getElementById('root'));
+        function handleRetourLobby() {
+            state.partie = null;
+            state.tentatives = [];
+            state.currentGuess = '';
+            state.gameOver = false;
+            setPage('lobby');
+        }
+
+        // Fonction de rendu principal
+        function render() {
+            const root = document.getElementById('root');
+            let content = '';
+
+            switch (state.page) {
+                case 'home':
+                    content = renderHomePage();
+                    break;
+                case 'register':
+                case 'login':
+                    content = renderRegisterPage();
+                    break;
+                case 'menu':
+                    content = renderMenuPage();
+                    break;
+                case 'createLobby':
+                    content = renderCreateLobbyPage();
+                    break;
+                case 'joinLobby':
+                    content = renderJoinLobbyPage();
+                    break;
+                case 'lobby':
+                    content = renderLobbyPage();
+                    break;
+                case 'jeu':
+                    content = renderJeuPage();
+                    break;
+            }
+
+            const messageHtml = state.message ? `
+                <div class="fixed top-4 left-1/2 transform -translate-x-1/2 bg-black text-white px-6 py-3 rounded-lg shadow-lg z-50">
+                    ${state.message}
+                </div>
+            ` : '';
+
+            root.innerHTML = messageHtml + content;
+        }
+
+        // Démarrage de l'app
+        init();
     </script>
 </body>
 </html>
