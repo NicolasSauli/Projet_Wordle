@@ -11,43 +11,73 @@ Projet_Wordle/
 │   └── requirements.txt  # Dependances Python
 ├── frontend/
 │   └── index.html        # Application React
-├── run.sh                # Script de demarrage
+├── run.sh                # Script de demarrage (Linux/Mac)
+├── run.bat               # Script de demarrage (Windows)
 └── README.md
 ```
 
 ## Installation et Lancement
 
-### Methode rapide (recommandee)
+### Windows
 
+**Methode rapide:**
+```
+Double-cliquez sur run.bat
+```
+
+**Methode manuelle:**
+```cmd
+:: Creer l'environnement virtuel
+python -m venv venv
+
+:: Activer l'environnement
+venv\Scripts\activate
+
+:: Installer les dependances
+pip install -r backend\requirements.txt
+
+:: Terminal 1 - Lancer le backend
+cd backend
+python -m uvicorn main:app --host 0.0.0.0 --port 8000
+
+:: Terminal 2 - Lancer le frontend
+cd frontend
+python -m http.server 3000
+```
+
+### Linux / Mac
+
+**Methode rapide:**
 ```bash
 chmod +x run.sh
 ./run.sh
 ```
 
-### Methode manuelle
-
-1. **Installer les dependances backend:**
+**Methode manuelle:**
 ```bash
-cd backend
-pip install -r requirements.txt
-```
+# Creer l'environnement virtuel
+python3 -m venv venv
 
-2. **Lancer le backend:**
-```bash
+# Activer l'environnement
+source venv/bin/activate
+
+# Installer les dependances
+pip install -r backend/requirements.txt
+
+# Terminal 1 - Lancer le backend
 cd backend
 uvicorn main:app --host 0.0.0.0 --port 8000
-```
 
-3. **Lancer le frontend** (dans un autre terminal):
-```bash
+# Terminal 2 - Lancer le frontend
 cd frontend
 python3 -m http.server 3000
 ```
 
-4. **Acceder au jeu:**
-- Frontend: http://localhost:3000
-- API: http://localhost:8000
-- Documentation API: http://localhost:8000/docs
+## Acceder au jeu
+
+- **Frontend**: http://localhost:3000
+- **API**: http://localhost:8000
+- **Documentation API**: http://localhost:8000/docs
 
 ## Fonctionnalites
 
